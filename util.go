@@ -38,9 +38,13 @@ func equalAny(a, b any) bool {
 }
 
 // normalize widens numeric kinds and recurses into slices and string-keyed maps
-// so that equalAny is insensitive to the concrete Go integer/float type used.
+// so that equalAny is insensitive to the concrete Go integer/float type used. A
+// [*Sensitive] is unwrapped first so a sensitive value still compares by its
+// content.
 func normalize(v any) any {
 	switch x := v.(type) {
+	case *Sensitive:
+		return normalize(x.value)
 	case int:
 		return int64(x)
 	case int8:
