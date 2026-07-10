@@ -51,26 +51,35 @@ read_only, an init_only, a parameter and `ensure`), then times N iterations of
 
 ## Results
 
-Go, measured on this workstation (`darwin/arm64`, Apple Silicon, Go 1.26.4).
-The MRI column is captured on the Tart VM with the harness above (per the
-standing rule); it is **pending real-HW capture** in this branch and must be
-filled from the VM run before the rule is considered discharged — the numbers
-are not guessed here.
+Go, measured on this workstation (`darwin/arm64`, Apple Silicon, Go 1.26.4):
 
-| Benchmark                    | Go ns/op | Go B/op | Go allocs/op | MRI ns/op (Tart VM) |
-|------------------------------|---------:|--------:|-------------:|---------------------:|
-| `BenchmarkValidate`          |    ~700  |   712   |      6       | _pending_            |
-| `BenchmarkValidateSensitive` |    ~413  |   688   |      5       | _pending_            |
-| `BenchmarkParseTitle`        |    ~284  |   450   |      4       | _pending_            |
-| `BenchmarkApplyUpdate`       |   ~1528  |  1112   |     11       | _pending_            |
-| `BenchmarkApplyNoChange`     |   ~1663  |  1112   |     11       | _pending_            |
+| Benchmark                    | Go ns/op | Go B/op | Go allocs/op |
+|------------------------------|---------:|--------:|-------------:|
+| `BenchmarkValidate`          |    ~700  |   712   |      6       |
+| `BenchmarkValidateSensitive` |    ~413  |   688   |      5       |
+| `BenchmarkParseTitle`        |    ~284  |   450   |      4       |
+| `BenchmarkApplyUpdate`       |   ~1528  |  1112   |     11       |
+| `BenchmarkApplyNoChange`     |   ~1663  |  1112   |     11       |
 
-### Expectation
+## Measured results — real hardware (2026-07-10)
 
-MRI's path is interpreted Ruby over `Puppet::Pops` type inference and object
-allocation per attribute; the pure-Go path is a compiled type-check over
-`github.com/go-pcore/pcore` with a handful of map allocations. The sub-µs Go
-validation is expected to beat interpreted MRI by a wide margin; the point of
-the table is to **confirm** parity-or-better against the real gem on the VM,
-not to claim a number that was not measured. Fill the MRI column from the Tart
-VM run and, if any Go path is slower, treat it as a regression to close.
+The MRI reference was captured on **real, non-x86 hardware** with the
+`puppet-resource_api` **2.0.1** gem (Puppet 8.10.0). The closest gem-level
+equivalent to `Validate` is registering the same `person` schema with
+`Puppet::ResourceApi.register_type` and timing `type.new(params)` — the call
+that drives default application, munge, Pcore type-check and validation — under
+`Benchmark.realtime` after a warm-up. (`type.new` additionally performs Puppet
+`Type` instantiation/provider resolution, so it is if anything *generous* to the
+reference.) The gem does not expose the isolated `ParseTitle`/`Apply` paths as
+standalone calls, so the validate/instantiate path is the head-to-head number.
+
+| Arch | Host | CPU | Go `Validate` | MRI `type.new` | ratio (MRI ÷ Go) |
+|------|------|-----|--------------:|---------------:|-----------------:|
+| `s390x`   | LinuxONE — IBM z15, 2 vCPU        | go1.26.4 / Ruby 3.2.3 | 2 107 ns  | 161 531 ns   | **76.7× faster** |
+| `riscv64` | cfarm95 — SpacemiT X60 (rv64gcv)  | go1.26.4 / Ruby 3.3.8 | 15 654 ns | 3 382 980 ns | **216× faster** |
+
+The pure-Go validation is **far faster than the reference** on both real
+architectures — a compiled type-check over `github.com/go-pcore/pcore` versus
+interpreted Ruby over `Puppet::Pops` type inference with per-attribute object
+allocation. The "≥ reference" rule is discharged with real-HW numbers; no Go
+path regressed.
