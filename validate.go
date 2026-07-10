@@ -8,10 +8,10 @@ import "github.com/go-pcore/pcore"
 
 // Title derives the resource title from r: the explicit [TitleKey] if present,
 // otherwise the value of the single namevar. For a multi-namevar type an
-// explicit title is required.
+// explicit title is required. A namevar wrapped in [*Sensitive] is unwrapped.
 func (t *Type) Title(r Resource) (string, error) {
 	if v, ok := r[TitleKey]; ok {
-		s, ok := v.(string)
+		s, ok := asString(v)
 		if !ok {
 			return "", &ValidationError{Type: t.def.Name, Attribute: TitleKey, Msg: "title must be a string"}
 		}
@@ -22,7 +22,7 @@ func (t *Type) Title(r Resource) (string, error) {
 		if !ok {
 			return "", &ValidationError{Type: t.def.Name, Msg: "cannot determine title: neither title nor namevar " + t.namevars[0] + " is set"}
 		}
-		s, ok := v.(string)
+		s, ok := asString(v)
 		if !ok {
 			return "", &ValidationError{Type: t.def.Name, Attribute: t.namevars[0], Msg: "namevar must be a string to serve as title"}
 		}
@@ -31,32 +31,57 @@ func (t *Type) Title(r Resource) (string, error) {
 	return "", &ValidationError{Type: t.def.Name, Msg: "multi-namevar type requires an explicit title"}
 }
 
-// applyTitlePatterns fills missing namevars in r by matching title against the
-// compiled patterns, in order. It reports whether any namevar remained unset.
-func (t *Type) applyTitlePatterns(r Resource, title string) {
-	for _, p := range t.patterns {
-		m := p.re.FindStringSubmatch(title)
-		if m == nil {
-			continue
-		}
-		names := p.re.SubexpNames()
-		for i, name := range names {
-			if name == "" {
-				continue
-			}
-			if _, set := r[name]; !set {
-				r[name] = m[i]
-			}
-		}
-		return
+// asString reports v as a string, unwrapping a [*Sensitive] first.
+func asString(v any) (string, bool) {
+	if u, ok := unwrapSensitive(v); ok {
+		v = u
 	}
+	s, ok := v.(string)
+	return s, ok
 }
 
+// ParseTitle decomposes a resource title into namevar values, mirroring
+// Puppet::ResourceApi's title-pattern resolution. When the type declares
+// [Definition.TitlePatterns] each pattern is tried in order and the named
+// captures of the first one that matches become the returned attribute values;
+// if none match, a [*ValidationError] is returned, exactly as the gem raises
+// when no set of title patterns matches. With no declared patterns a
+// single-namevar type maps the whole title to its namevar (the gem's default
+// [[/(.*)/m, [[namevar]]]] pattern) and a multi-namevar type is an error.
+func (t *Type) ParseTitle(title string) (map[string]string, error) {
+	if len(t.patterns) > 0 {
+		for _, p := range t.patterns {
+			m := p.re.FindStringSubmatch(title)
+			if m == nil {
+				continue
+			}
+			out := make(map[string]string, len(p.groups))
+			names := p.re.SubexpNames()
+			for i, name := range names {
+				if name == "" {
+					continue
+				}
+				out[name] = m[i]
+			}
+			return out, nil
+		}
+		return nil, &ValidationError{Type: t.def.Name, Msg: "no set of title patterns matched the title " + quote(title)}
+	}
+	if len(t.namevars) == 1 {
+		return map[string]string{t.namevars[0]: title}, nil
+	}
+	return nil, &ValidationError{Type: t.def.Name, Msg: "multi-namevar type requires title_patterns to decompose title " + quote(title)}
+}
+
+// quote wraps s in double quotes for error messages without pulling in fmt.
+func quote(s string) string { return "\"" + s + "\"" }
+
 // Validate checks a desired-state resource against the type and returns a new,
-// fully-populated resource: missing namevars are derived from the title, missing
-// attributes with defaults are filled, munge seams run, every value is checked
-// against its Pcore type and custom validate seams run. It returns a
-// [*ValidationError] on the first problem.
+// fully-populated resource: missing namevars are derived from the title (via the
+// title patterns), missing attributes with defaults are filled, munge seams run,
+// every value is checked against its Pcore type, custom validate seams run and
+// sensitive values are wrapped. It returns a [*ValidationError] on the first
+// problem.
 func (t *Type) Validate(input Resource) (Resource, error) {
 	// Reject unknown attributes and read_only management up front, before we
 	// mutate anything.
@@ -79,13 +104,18 @@ func (t *Type) Validate(input Resource) (Resource, error) {
 		out[k] = v
 	}
 
-	// Derive namevars from the title when possible.
+	// Derive namevars from the title when a title is obtainable. A title is
+	// obtainable for a single-namevar type or when TitleKey is given; a
+	// multi-namevar type whose namevars are already supplied has no title and
+	// simply skips decomposition.
 	if title, err := t.Title(out); err == nil {
-		t.applyTitlePatterns(out, title)
-		// A single namevar always equals the title when not otherwise set.
-		if len(t.namevars) == 1 {
-			if _, set := out[t.namevars[0]]; !set {
-				out[t.namevars[0]] = title
+		parsed, perr := t.ParseTitle(title)
+		if perr != nil {
+			return nil, perr
+		}
+		for k, v := range parsed {
+			if _, set := out[k]; !set {
+				out[k] = v
 			}
 		}
 	}
@@ -100,20 +130,22 @@ func (t *Type) Validate(input Resource) (Resource, error) {
 		}
 	}
 
-	// Munge, type-check and custom-validate every present attribute.
+	// Munge, type-check, custom-validate and (last) wrap-if-sensitive every
+	// present attribute, in that order.
 	for _, name := range t.order {
 		ca := t.attrs[name]
 		v, set := out[name]
 		if !set {
 			continue
 		}
+		raw, wasWrapped := unwrapSensitive(v)
+		v = raw
 		if ca.spec.Munge != nil {
 			mv, err := ca.spec.Munge(v)
 			if err != nil {
 				return nil, &ValidationError{Type: t.def.Name, Attribute: name, Msg: "munge failed: " + err.Error()}
 			}
 			v = mv
-			out[name] = mv
 		}
 		if !pcore.IsInstance(ca.typ, v) {
 			return nil, &ValidationError{Type: t.def.Name, Attribute: name, Msg: "value does not match type " + ca.typ.String()}
@@ -122,6 +154,11 @@ func (t *Type) Validate(input Resource) (Resource, error) {
 			if err := ca.spec.Validate(v); err != nil {
 				return nil, &ValidationError{Type: t.def.Name, Attribute: name, Msg: "validation failed: " + err.Error()}
 			}
+		}
+		if ca.spec.Sensitive || wasWrapped {
+			out[name] = NewSensitive(v)
+		} else {
+			out[name] = v
 		}
 	}
 
@@ -133,4 +170,15 @@ func (t *Type) Validate(input Resource) (Resource, error) {
 	}
 
 	return out, nil
+}
+
+// Canonicalize runs the type's [Definition.Canonicalize] hook over resources
+// when the canonicalize feature is declared and a hook is set, returning the
+// normalised resources; otherwise it returns resources unchanged. It is the
+// public entry point mirroring the gem's my_provider.canonicalize call.
+func (t *Type) Canonicalize(ctx *Context, resources []Resource) ([]Resource, error) {
+	if !t.Canonicalizes() {
+		return resources, nil
+	}
+	return t.def.Canonicalize(ctx, resources)
 }

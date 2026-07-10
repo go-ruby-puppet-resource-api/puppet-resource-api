@@ -29,8 +29,9 @@ It provides three cooperating pieces that mirror the gem:
   translates that change set into create/update/delete calls on a
   `CrudProvider`.
 
-The package embeds no Ruby runtime: the munge, validate, canonicalize and
-provider hooks are Go func/interface seams a consumer such as
+The package embeds no Ruby runtime: the munge, validate, canonicalize,
+custom_insync, transport-connect and provider hooks are Go func/interface seams
+a consumer such as
 [go-embedded-ruby](https://github.com/go-embedded-ruby) can wire to Ruby blocks.
 
 ## Install
@@ -56,14 +57,36 @@ r, err := ty.Validate(resourceapi.Resource{"name": "alice", "role": "admin"})
 
 ## Scope
 
-Supported: type definition + validation, all four behaviours, title patterns,
-features, auto-relations, defaults, munge/validate/canonicalize seams, the
-get/set provider contract and the `SimpleProvider` create/update/delete base
-honoring `ensure` and `init_only`.
+Supported: type definition + validation, all four behaviours, multi-pattern /
+multi-capture `title_patterns` resolution, auto-relations, defaults, the
+munge → type-check → validate pipeline with per-attribute munge/validate and
+per-type canonicalize seams, the get/set provider contract and the
+`SimpleProvider` create/update/delete base that decides each action from the
+`ensure` values, honoring `init_only`.
 
-Deferred: transport/device support for network devices, the `custom_insync`
-per-property comparison hook, sensitive-value redaction beyond plain storage,
-and the JSON-schema / puppet-strings documentation emitters.
+Every feature flag the gem acts on is honored:
+
+- **`canonicalize`** — the per-type normalise hook, gated on the feature.
+- **`custom_insync`** — the per-property comparison seam that overrides the
+  default deep-equal in change detection.
+- **`simple_get_filter`** — a filtered `GetFiltered(names)` fetch of only the
+  managed titles.
+- **`supports_noop`** — a noop-aware `SetNoop(changes, noop)` dispatch (a plain
+  noop run reports the change set without applying it).
+- **`remote_resource`** — transport/device support: `RegisterTransport(schema)`
+  compiles a `Transport` that validates connection info like a type and opens a
+  `Connection` through a host-side connect seam; `NewDeviceContext` exposes it
+  to a provider via `Context.Device()`.
+
+Attributes declared `Sensitive` are wrapped in `*Sensitive` after validation so
+logs and errors redact them (`Type.Redact`), while equality still compares the
+underlying content.
+
+Executing the Ruby bodies bound to the seams (munge/validate/canonicalize/
+custom_insync/connect blocks) is the [go-embedded-ruby](https://github.com/go-embedded-ruby)
+binding layer's job; the behaviour the gem specifies lives here.
+
+Out of scope: the JSON-schema / puppet-strings documentation emitters.
 
 ## License
 

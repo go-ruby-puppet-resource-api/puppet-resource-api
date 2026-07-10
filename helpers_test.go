@@ -128,3 +128,62 @@ func (m *memProvider) Delete(ctx *Context, name string) error {
 	delete(m.store, name)
 	return nil
 }
+
+// filteredMem is a memProvider that also records the names passed to a filtered
+// get, letting SimpleProvider satisfy FilterProvider for simple_get_filter.
+type filteredMem struct {
+	*memProvider
+	filteredWith []string
+}
+
+func newFilteredMem() *filteredMem { return &filteredMem{memProvider: newMem()} }
+
+func (f *filteredMem) GetFiltered(ctx *Context, names []string) ([]Resource, error) {
+	f.filteredWith = append([]string{}, names...)
+	return f.memProvider.Get(ctx)
+}
+
+// bareProvider implements only the Provider contract (no GetFiltered), used to
+// exercise the simple_get_filter fall-through when a provider is not a
+// FilterProvider.
+type bareProvider struct {
+	got  bool
+	setc map[string]Change
+}
+
+func (b *bareProvider) Get(ctx *Context) ([]Resource, error) { b.got = true; return nil, nil }
+func (b *bareProvider) Set(ctx *Context, changes map[string]Change) error {
+	b.setc = changes
+	return nil
+}
+
+// noopProvider is a Provider that records whether Set/SetNoop ran and the noop
+// flag it saw, for the supports_noop tests.
+type noopProvider struct {
+	setCalled  bool
+	noopCalled bool
+	sawNoop    bool
+}
+
+func (n *noopProvider) Get(ctx *Context) ([]Resource, error) { return nil, nil }
+func (n *noopProvider) Set(ctx *Context, changes map[string]Change) error {
+	n.setCalled = true
+	return nil
+}
+func (n *noopProvider) SetNoop(ctx *Context, changes map[string]Change, noop bool) error {
+	n.noopCalled = true
+	n.sawNoop = noop
+	return nil
+}
+
+// sensitiveDef is a type with a sensitive property, used for redaction tests.
+func sensitiveDef() Definition {
+	return Definition{
+		Name: "secret",
+		Attributes: map[string]Attribute{
+			"name":     {Type: "String", Behaviour: Namevar},
+			"password": {Type: "String", Sensitive: true},
+			"ensure":   {Type: "Enum['present','absent']", HasDefault: true, Default: "present"},
+		},
+	}
+}

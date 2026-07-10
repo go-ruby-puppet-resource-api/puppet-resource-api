@@ -31,17 +31,30 @@
 //     the owning [Type] and feature checks). [Apply] drives a full run: it calls
 //     Get for the current state, validates and canonicalizes desired against
 //     current, computes the per-title [Change] set honoring ensure and the
-//     init_only behaviour, then calls Set. [SimpleProvider] is the base that
-//     translates that change set into create/update/delete calls on a
-//     [CrudProvider], exactly like the gem's SimpleProvider.
+//     init_only behaviour and any custom_insync hook, then calls Set.
+//     [SimpleProvider] is the base that translates that change set into
+//     create/update/delete calls on a [CrudProvider], deciding each from the
+//     ensure values exactly like the gem's SimpleProvider.
+//
+//   - Transport / device support. [RegisterTransport] compiles a
+//     [TransportSchema] (typed connection_info attributes) into a [Transport]
+//     that validates connection info like a type and opens a [Connection]
+//     through a host-side connect seam; [NewDeviceContext] hands a
+//     remote_resource provider that connection through [Context.Device].
+//
+// The feature flags the gem acts on are all honored: canonicalize,
+// custom_insync (the per-property [Definition.CustomInsync] comparison seam that
+// overrides the default deep-equal), simple_get_filter (a filtered
+// [FilterProvider.GetFiltered] fetch of only the managed titles), supports_noop
+// (a noop-aware [NoopProvider.SetNoop] dispatch) and remote_resource. Attributes
+// declared Sensitive are wrapped in [*Sensitive] after validation so logs and
+// error messages redact them ([Type.Redact]).
 //
 // The package is a pure library: it embeds no Ruby runtime. The interpreter
-// facing hooks (munge, validate, canonicalize and the provider itself) are Go
-// func and interface seams that a consumer such as go-embedded-ruby (rbgo) can
-// later wire to Ruby blocks.
-//
-// Deliberately out of scope (deferred): transport/device support for network
-// devices, the custom_insync per-property comparison hook, sensitive-value
-// redaction beyond plain storage, and the JSON schema / puppet-strings
-// documentation emitters.
+// facing hooks (munge, validate, canonicalize, custom_insync, the transport
+// connect seam and the provider itself) are Go func and interface seams that a
+// consumer such as go-embedded-ruby (rbgo) wires to Ruby blocks; executing the
+// Ruby bodies of those blocks is that binding layer's job. Everything the gem
+// specifies as behaviour — title-pattern resolution, the validate/apply pipeline
+// ordering, the change model and the feature flags — lives here.
 package resourceapi

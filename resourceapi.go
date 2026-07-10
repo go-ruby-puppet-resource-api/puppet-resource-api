@@ -73,6 +73,11 @@ type Attribute struct {
 	// Validate, when set, runs custom validation after type validation. It is
 	// the seam a Ruby validate block binds to.
 	Validate func(any) error
+	// Sensitive marks an attribute whose value must never be revealed by
+	// rendering. [Type.Validate] wraps a present sensitive value in [*Sensitive]
+	// after munge/type-check/validate, so logs and error messages redact it,
+	// mirroring the gem's `sensitive: true` option.
+	Sensitive bool
 }
 
 // TitlePattern maps a resource title onto namevar values via a regular
@@ -114,6 +119,15 @@ type Definition struct {
 	// semantically identical. It is the seam a Ruby canonicalize method binds
 	// to.
 	Canonicalize func(ctx *Context, resources []Resource) ([]Resource, error)
+	// CustomInsync, when set and enabled by the "custom_insync" feature, decides
+	// per property whether the current value (is) already matches the desired
+	// value (should), overriding the default deep-equal comparison. It is called
+	// once per property that would otherwise be compared, with the full is and
+	// should hashes and the property name. It returns insync (true when the
+	// property needs no change) and handled (false to fall through to the
+	// default comparison, mirroring a Ruby insync? block returning nil). It is
+	// the seam a Ruby provider insync? method binds to.
+	CustomInsync func(ctx *Context, name, property string, is, should Resource) (insync, handled bool, err error)
 }
 
 // compiledAttr is an [Attribute] with its Pcore type parsed.
@@ -161,6 +175,58 @@ func (t *Type) Namevars() []string {
 
 // HasFeature reports whether the named feature is declared on the type.
 func (t *Type) HasFeature(name string) bool { return t.features[name] }
+
+// Feature names recognised by the gem. Unknown feature names are still accepted
+// (the gem only warns); these constants name the ones this package acts on.
+const (
+	// FeatureCanonicalize enables the [Definition.Canonicalize] hook.
+	FeatureCanonicalize = "canonicalize"
+	// FeatureCustomInsync enables the [Definition.CustomInsync] hook.
+	FeatureCustomInsync = "custom_insync"
+	// FeatureSimpleGetFilter lets [Type.Apply] fetch only the managed names via
+	// a [FilterProvider].
+	FeatureSimpleGetFilter = "simple_get_filter"
+	// FeatureSupportsNoop lets [Type.Apply] hand the noop flag to a
+	// [NoopProvider] instead of skipping Set itself.
+	FeatureSupportsNoop = "supports_noop"
+	// FeatureRemoteResource marks a type managed over a transport/device
+	// connection rather than the local host.
+	FeatureRemoteResource = "remote_resource"
+)
+
+// Canonicalizes reports whether the type both declares the canonicalize feature
+// and supplies a hook.
+func (t *Type) Canonicalizes() bool {
+	return t.features[FeatureCanonicalize] && t.def.Canonicalize != nil
+}
+
+// CustomInsyncs reports whether the type both declares the custom_insync feature
+// and supplies a hook.
+func (t *Type) CustomInsyncs() bool {
+	return t.features[FeatureCustomInsync] && t.def.CustomInsync != nil
+}
+
+// SimpleGetFilter reports whether the type declares the simple_get_filter
+// feature.
+func (t *Type) SimpleGetFilter() bool { return t.features[FeatureSimpleGetFilter] }
+
+// SupportsNoop reports whether the type declares the supports_noop feature.
+func (t *Type) SupportsNoop() bool { return t.features[FeatureSupportsNoop] }
+
+// RemoteResource reports whether the type declares the remote_resource feature.
+func (t *Type) RemoteResource() bool { return t.features[FeatureRemoteResource] }
+
+// SensitiveAttributes returns, in sorted order, the names of the attributes the
+// type declares sensitive.
+func (t *Type) SensitiveAttributes() []string {
+	var out []string
+	for _, name := range t.order {
+		if t.attrs[name].spec.Sensitive {
+			out = append(out, name)
+		}
+	}
+	return out
+}
 
 var typeNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -274,13 +340,17 @@ func itoa(i int) string {
 // Registry holds compiled types by name, mirroring Puppet's global type
 // registry. It is safe for concurrent use.
 type Registry struct {
-	mu    sync.Mutex
-	types map[string]*Type
+	mu         sync.Mutex
+	types      map[string]*Type
+	transports map[string]*Transport
 }
 
 // NewRegistry returns an empty [Registry].
 func NewRegistry() *Registry {
-	return &Registry{types: make(map[string]*Type)}
+	return &Registry{
+		types:      make(map[string]*Type),
+		transports: make(map[string]*Transport),
+	}
 }
 
 // Register compiles d and stores the resulting [Type], returning an error if the
