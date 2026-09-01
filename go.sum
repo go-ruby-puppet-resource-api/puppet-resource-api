@@ -2,3 +2,5 @@ github.com/go-pcore/pcore v0.0.0-20260708052910-1416bf219e47 h1:pPEpa5r9lGvOEbiy
 github.com/go-pcore/pcore v0.0.0-20260708052910-1416bf219e47/go.mod h1:MgngaL59lB3D41kl/VWYfkem1sJDBbh3JXG/y/Lrnjo=
 github.com/go-pcore/pcore v0.0.0-20260710172832-c8e1b1c3950f h1:nX+T8DQJL3aMvTaF7wB/jYxIqmG21ujvdxHrESnkYI8=
 github.com/go-pcore/pcore v0.0.0-20260710172832-c8e1b1c3950f/go.mod h1:MgngaL59lB3D41kl/VWYfkem1sJDBbh3JXG/y/Lrnjo=
+github.com/go-pcore/pcore v0.0.0-20260831114716-f9c3e7f59eaa h1:JNWdYslHUIBvlGE7aKJWtJ+Z6U2riJn+v8NquDVMy+U=
+github.com/go-pcore/pcore v0.0.0-20260831114716-f9c3e7f59eaa/go.mod h1:MgngaL59lB3D41kl/VWYfkem1sJDBbh3JXG/y/Lrnjo=
